@@ -1,1 +1,3 @@
-# Forecasting Super Bowl LIII: Score Predictions
+# Predicting flight delay with machine learning
+The air transportation system is a very important part of any economy and flight delays can result in the disruption of planned schedules, increased cost and waste of time for the passengers and the airline. Many delays are a result of air traffic, weather change or mechanical failures which could be unpredictable. Our ability to predict accurately the possibility of flight delays will save the passengers a lot of time and money and this will enable passengers to have enough time in case of a need for flight connection. The primary goal of this project is to predict airline delays caused by various factors. 
+
