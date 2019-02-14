@@ -1,0 +1,360 @@
+---
+title: "Predicting flight delay"
+author: "Daniela"
+date: "February 13, 2019"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+```{r cars}
+library(dplyr)
+
+library(caret)
+#### Step 1: Import Data.
+setwd("C:/Users/Daniela Orovwiroro/Downloads/machine learning project/NEW FLIGHT")
+# Import flights dataset after dowloading from the TSA website
+flight = read.csv("flight.csv",sep=",", header=TRUE, stringsAsFactors = FALSE)
+Airports = read.csv("airports.csv",sep=",", header=TRUE, stringsAsFactors = FALSE)
+Airline = read.csv("airlines.csv",sep=",", header=TRUE, stringsAsFactors = FALSE)
+
+# Examine the imported flight data.
+dim(flight) 
+# Review the first 6 rows of flight data.
+head(flight)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+#### Step 2: Pre-process Data.
+# Create a new column 'Airline_desc' in flight data.
+flight$Airline_desc = Airline$AIRLINE[match(flight$AIRLINE,Airline$IATA_CODE)] 
+# Merge flight records and Airline data.
+flight= flight %>% filter(!is.na(ARRIVAL_DELAY) & !is.na( DEPARTURE_DELAY) & !is.na( DEPARTURE_TIME)) %>%
+  left_join(Airline, by = c("AIRLINE"="IATA_CODE")) %>% mutate(gain = DEPARTURE_DELAY - ARRIVAL_DELAY) %>%
+  rename()
+
+flight$ï..YEAR=NULL
+flight$TAIL_NUMBER=NULL
+flight$FLIGHT_NUMBER=NULL
+flight$X=NULL
+flight$TAXI_OUT=NULL
+flight$TAXI_IN=NULL
+flight$WHEELS_OFF=NULL
+flight$WHEELS_ON=NULL
+flight$DIVERTED=NULL
+flight$AIRLINE.y=NULL 
+flight$SCHEDULED_ARRIVAL=NULL
+flight$CANCELLATION_REASON=NULL
+flight$LATE_AIRCRAFT_DELAY=NULL
+flight$SCHEDULED_DEPARTURE= NULL
+flight$SCHEDULED_TIME=NULL
+flight$AIR_SYSTEM_DELAY=NULL
+flight$SECURITY_DELAY=NULL
+flight$AIRLINE_DELAY=NULL
+flight$ELAPSED_TIME=NULL
+flight$YEAR=NULL
+#Next, create a new column called WEEKEND which will group the weekend days.
+flight$WEEKEND = ifelse(flight$DAY_OF_WEEK == "5" | flight$DAY_OF_WEEK == "6" | flight$DAY_OF_WEEK == "7",1,0)
+#Next, create a new column called DEP_HOUR which will have extracted hour value from DEP_TIME column.
+flight$DEP_HOUR = floor(flight$DEPARTURE_TIME/100)
+
+
+#Creating a New Feature: Number of Days to Holiday
+
+holidays = c('2015-01-01', '2015-01-19', '2015-02-16', '2015-05-25',
+              '2015-07-03', '2015-09-07', '2015-10-12', '2015-11-11',
+              '2015-11-26', '2015-12-25') # Ten major holidays, including Memorial Day, Columbus Day, Labor Day, MLK Day
+# Veteran's Day, New Year's, President's Day, Independence Day, Thanksgiving, 
+# and Christmas Day.
+holidayDates = as.Date(holidays)
+
+#let's create a function to calculate the difference between each of our flight dates and the nearest holiday. 
+DaysToHoliday = function(month, day){
+  # Get our year.
+    year <- 2015
+    
+  
+currDate = as.Date(paste(year,month,day,sep = '-')) # Create a DATE object we can use to calculate the time difference
+  
+  
+numDays = as.numeric(min(abs(currDate-holidayDates))) # Now find the minimum difference between the date and our holidays
+  return(numDays)                                        # We can vectorize this to automatically find the minimum closest
+  # holiday by subtracting all holidays at once
+}
+
+
+datesOfYear = unique(flight[,1:2]) # Get all of the dates through unique Month/Day combinations
+datesOfYear$HDAYS = mapply(DaysToHoliday, datesOfYear$MONTH, datesOfYear$DAY) 
+    
+# Apply our function in a vectorized manner via one of R's many "apply" functions (in this case mapply)
+# to each unique date and save 
+head(datesOfYear)
+
+```
+```{r}
+InputDays <- function(month,day){
+    finalDays <- datesOfYear$HDAYS[datesOfYear$MONTH == month & datesOfYear$DAY == day] # Find which row to get
+    return(finalDays)
+}
+
+flight$HDAYS = mapply(InputDays, flight$MONTH, flight$DAY)
+head(flight)
+
+#Now, let us introduce one more column called DELAY_LABELED which has value 1 
+#if the arrival delay(ARR_DELAY) is more than 15 minutes and 0 if ARR_DELAY is less than 15 minutes. 
+#That means all flights which are arrived 15 minutes delayed are considered to be delayed.
+flight$DELAY_LABELED = ifelse(flight$ARRIVAL_DELAY > 15, 1, 0)
+
+#Next, edit the weather column assigning value 1 if the delay is more than 15 minutes and 0 if delay is less than 15 minutes.
+flight$WEATHER_DELAY[is.na(flight$WEATHER_DELAY)]=0
+flight$WEATHER_DELAYs= ifelse(flight$WEATHER_DELAY>15,1,0)
+
+flight$ARR_DEL15= ifelse(flight$ARRIVAL_DELAY>15,1,0)
+flight$DEP_DEL15= ifelse(flight$DEPARTURE_DELAY>15,1,0)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+```{r}
+library(e1071)
+#### Step 3: Prepare Training and Test Datasets.
+## 80/20 split
+# Filter records and create target variable 'gain'
+model_data = flight %>% select( DELAY_LABELED,DAY_OF_WEEK, ARRIVAL_DELAY,WEEKEND,WEATHER_DELAY,DISTANCE, DEPARTURE_DELAY, Airline_desc,AIRLINE,gain)
+
+tr = sample(nrow(model_data), round(nrow(model_data) * 0.8))
+train = model_data[tr, ]
+test = model_data[-tr, ]
+
+
+
+###Step 4: Classification
+library(mlbench)
+library(partykit)
+library(rpart.plot)
+library(RWeka)
+
+
+##(a)using classification with Decision Tree.
+# Build a decision tree model.
+library(rpart) ## recursive partitioning
+m =  rpart(gain ~ WEEKEND+DELAY_LABELED+AIRLINE +WEATHER_DELAY+DISTANCE, data = model_data,
+           cp=0)
+pfit= prune(m, cp=m$cptable[9,"CP"])
+
+prp(pfit,type=1,extra=100,fallen.leaves=F,shadow.col="darkgray",box.col=rgb(0.8,0.9,0.8))
+
+
+
+write.arff(model_data,"modeldata.arff")
+```
+```{r}
+##Step c: Classification using SVM model.
+#Convert the outcome variable class to a factor:
+train$DELAY_LABELED=factor(train$DELAY_LABELED)
+#Build the model:
+trctrl = trainControl(method = "repeatedcv", number = 10, repeats = 3)
+set.seed(3233)
+ 
+svm_Linear = train(DELAY_LABELED ~., data = train, method = "svmLinear",
+                 trControl=trctrl,
+                 preProcess = c("center", "scale"),
+                 tuneLength = 10)
+svm_Linear
+#predicting the result
+test_pred = predict(svm_Linear, newdata = test)
+
+```
+```{r}
+ontime = flight[!is.na(flight$ARR_DEL15) & flight$ARR_DEL15!="" & !is.na(flight$DEP_DEL15) & flight$DEP_DEL15!="",]
+#Change the data class of the filtered data to enable data processing and running algorithms.
+ontime$DESTINATION_AIRPORT =  as.factor(ontime$DESTINATION_AIRPORT)
+ontime$ORIGIN_AIRPORT = as.factor(ontime$ORIGIN_AIRPORT)
+ontime$DAY_OF_WEEK = as.factor(ontime$DAY_OF_WEEK)
+ontime$DISTANCE = as.integer(ontime$DISTANCE)
+ontime$CANCELLED = as.integer(ontime$CANCELLED)
+ontime$DEP_HOUR = as.factor(ontime$DEP_HOUR)
+ontime$AIRLINE= as.factor(ontime$AIRLINE)
+ontime$Airline_desc= as.factor(ontime$Airline_desc)
+ontime$ARR_DEL15 <- as.factor(ontime$ARR_DEL15)
+ontime$DEP_DEL15 <-as.factor(ontime$DEP_DEL15)
+ontime$gain <- as.factor(ontime$gain)
+####Step6:Visualisation
+# Summarize data by carrier
+
+model_data$DELAY_LABELED=as.integer(model_data$DELAY_LABELED)
+model_data$DAY_OF_WEEK=as.integer(model_data$DAY_OF_WEEK)
+model_data$ARRIVAL_DELAY =  as.integer(model_data$ARRIVAL_DELAY)
+model_data$WEEKEND=as.integer(model_data$WEEKEND)
+model_data$WEATHER_DELAY=as.integer(model_data$WEATHER_DELAY)
+model_data$DISTANCE=as.integer(model_data$DISTANCE)
+model_data$DEPARTURE_DELAY=as.integer(model_data$DEPARTURE_DELAY)
+model_data$Airline_desc=as.character(model_data$Airline_desc)
+model_data$AIRLINE=as.character(model_data$AIRLINE)
+model_data$gain= as.integer(model_data$gain)
+
+new_flights= model_data %>%group_by(AIRLINE) %>%
+  summarize(Airline_desc = min(Airline_desc), gain=mean(gain), 
+            DEPARTURE_DELAY=mean(DEPARTURE_DELAY)) %>%
+  arrange(gain)
+
+Flight.df=flight
+#We create a new dataframe called delay which will have two columns, DELAY_LABELED and the count of it.
+#Basically it will have a count of delayed flights and ontime flights.
+#We will be using aggregate function of SparkR where we group the dataframe by DELAY_LABELED and calculating the count using n().
+delay = Flight.df %>% 
+  group_by(DELAY_LABELED) %>% 
+  summarise(count=n())
+#Introduce a new column called STATUS which will have value ontime if DELAY_LABELED is 0 and delayed if DELAY_LABELED is 1.
+delay$STATUS = ifelse(delay$DELAY_LABELED == 0, "ontime", "delayed")
+
+#Delete a first column DELAY_LABELED because we do not need it anymore.
+delay = delay[,-1]
+
+#Add Percentage as one more column to this new dataframe.
+delay$Percentage = (delay$count / sum(delay$count)) * 100
+delay$Percentage = round(delay$Percentage,2)
+head(delay)
+
+blank_theme = theme_minimal()+
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    panel.border = element_blank(),
+    panel.grid=element_blank(),
+    axis.ticks = element_blank(),
+    plot.title=element_text(size=14, face="bold")
+  )
+#We will draw a pie chart showing the percentage of delayed and ontime flights.
+ggplot(delay, aes(x="",y=Percentage,fill=STATUS)) + geom_bar(stat="identity",width=1,colour="green") + coord_polar(theta="y",start=0) + blank_theme + ggtitle("Pie Chart for Flights") + theme(axis.text.x=element_blank()) + geom_text(aes(y = Percentage/2,label = paste0(Percentage,"%"),hjust=2))
+library(plotrix)
+slices <- delay$Percentage
+lbls <- c("Ontime(81.54%)", "Delayed(18.46%)")
+
+pie3D(slices,labels=lbls,explode=0.1,
+  	main="Pie Chart of delayed flight ")
+#The following plot shows when flights show how far destination cities are from a given originating airport. This is of importance as longer the flight, airlines can make up time in the air.
+plot(ontime$DISTANCE ~ ontime$ORIGIN)
+
+plot(flight$ARRIVAL_DELAY ~ flight$DAY_OF_WEEK,main= "Delays by day of week")
+plot(flight$WEATHER_DELAY~flight$MONTH,type="h", main= "Weather Delays by month")
+```
+```{r}
+#Let us explore what effect Day_Of_Week has on the dataset. We will create two new dataframes called delay_flights and non_delay_flights which will have details for delayed and ontime flights respectively.
+delay_flights = filter(Flight.df,Flight.df$DELAY_LABELED == 1)
+non_delay_flights = filter(Flight.df,Flight.df$DELAY_LABELED == 0)
+#Next, we will find the count of delayed and ontime flights grouped by Day_Of_Week.
+delay_flights_count = delay_flights %>% group_by(DAY_OF_WEEK)%>%  summarise(count=n())
+non_delay_flights_count = non_delay_flights %>% group_by(DAY_OF_WEEK)%>%  summarise(count=n())
+
+#Now, we can merge both delay_flights_count and non_delay_flights_count dataframes.
+dayofweek_count = merge(x = delay_flights_count, y = non_delay_flights_count, by = "DAY_OF_WEEK", all.x = TRUE)
+names(dayofweek_count)[names(dayofweek_count) == 'count.x'] = 'DELAY_COUNT'
+names(dayofweek_count)[names(dayofweek_count) == 'count.y'] = 'NON_DELAY_COUNT'
+
+#Introduce two columns, Delayed and Ontime, which have the percentage values for DELAY_COUNT and NON_DELAY_COUNT respectively.
+dayofweek_count$Delayed = (dayofweek_count$DELAY_COUNT/(dayofweek_count$DELAY_COUNT+dayofweek_count$NON_DELAY_COUNT)) * 100
+
+dayofweek_count$Ontime = (dayofweek_count$NON_DELAY_COUNT/(dayofweek_count$DELAY_COUNT+dayofweek_count$NON_DELAY_COUNT)) * 100
+
+dayofweek_count = dayofweek_count[,-2:-3]
+
+#Next, add one more column which represents the ratio of delayed flights against ontime flights.
+dayofweek_count$Ratio = dayofweek_count$Delayed/dayofweek_count$Ontime * 100
+
+dayofweek_count$Ratio = round(dayofweek_count$Ratio,2)
+
+
+#Now, if you look closely, our data is in wide format. The data is said to be in wide format if there
+#is one observation row per subject with each measurement present as a different variable. We have to 
+#change it to long format which means there is one observation row per measurement thus multiple rows 
+#per subject. In R, we use reshape to do this:
+library(reshape2)
+DF1 = melt(dayofweek_count, id.var="DAY_OF_WEEK")
+DF1$Ratio = DF1[15:21,3]
+DF1
+
+#We will change this dataframe just to make the plot more clearer.
+DF1 = DF1[-15:-21,]
+DF1[8:14,4] = NA
+
+#Next, run the following line to see the stacked bar chart:
+library(ggrepel)
+
+ggplot(DF1, aes(x=DAY_OF_WEEK,y=value,fill=variable)) + geom_bar(stat="identity") + geom_path(aes(y=Ratio,color="Ratio of Delayed flights against Non Delayed Flights")) + geom_text_repel(aes(label=Ratio), size = 3) + ggtitle("Percentage of Flights Delayed") + labs(x="Day of Week",y="Percentage")
+
+#As you can see here, most delays are happening on Tuesday and Saturday. It drops during the start of the weekend but again rises up by Sunday.
+#Now we will look over Destination effect on the delays,
+# Summarize data by carrier
+new_dest_delay_flights= delay_flights %>% group_by(DESTINATION_AIRPORT) %>%summarise(count=n())
+new_dest_non_delay_flights= non_delay_flights %>% group_by(DESTINATION_AIRPORT) %>%summarise(count=n())
+
+#Create two new dataframes from delay_flights and non_delay_flights dataframes respectively which will have the count of flights specific to some Destinations like LAX, SFO, HNL, PDX.
+destination_delay_count = delay_flights %>% group_by(DESTINATION_AIRPORT)%>%  summarise(count=n())
+destination_delay_count = destination_delay_count[(destination_delay_count$DESTINATION_AIRPORT == "ATL" | destination_delay_count$DESTINATION_AIRPORT == "ORD" | destination_delay_count$DESTINATION_AIRPORT == "DFW" | destination_delay_count$DESTINATION_AIRPORT == "DEN") ,]
+
+destination_non_delay_count = non_delay_flights %>% group_by(DESTINATION_AIRPORT)%>%  summarise(count=n())
+destination_non_delay_count = destination_non_delay_count[(destination_non_delay_count$DESTINATION_AIRPORT == "ATL" | destination_non_delay_count$DESTINATION_AIRPORT == "ORD" | destination_non_delay_count$DESTINATION_AIRPORT == "DFW" | destination_non_delay_count$DESTINATION_AIRPORT == "DEN") ,]
+
+#Lets merge these two new dataframes into one.
+destination_count = merge(x = destination_delay_count, y = destination_non_delay_count, by = "DESTINATION_AIRPORT", all.x = TRUE)
+names(destination_count)[names(destination_count) == 'count.x'] = 'DELAY_COUNT'
+names(destination_count)[names(destination_count) == 'count.y'] = 'NON_DELAY_COUNT'
+
+destination_count$Delayed = (destination_count$DELAY_COUNT/(destination_count$DELAY_COUNT+destination_count$NON_DELAY_COUNT)) * 100
+destination_count$Ontime = (destination_count$NON_DELAY_COUNT/(destination_count$DELAY_COUNT+destination_count$NON_DELAY_COUNT)) * 100
+destination_count = destination_count[,-2:-3]
+
+#Introduce one more column called Ratio which has the proportion of delayed flights against ontime flights on the four aforementioned destinations
+destination_count$Ratio = destination_count$Delayed/destination_count$Ontime * 100
+destination_count$Ratio = round(destination_count$Ratio,2)
+
+#As earlier, let us melt down this dataframe too to create a stacked bar chart. Use melt function of reshape package.
+DF2 = melt(destination_count, id.var="DESTINATION_AIRPORT")
+DF2$Ratio = DF2[9:12,3]
+DF2 = DF2[-9:-12,]
+DF2[5:8,4] = NA
+```
+
+```{r}
+#Draw a stacked bar chart:
+ggplot(DF2, aes(x=DESTINATION_AIRPORT,y=value,fill=variable)) + geom_bar(stat="identity") + geom_path(aes(y=Ratio,color="Ratio of Delayed flights against Non Delayed Flights"),group = 1) + geom_text_repel(aes(label=Ratio), size = 3) + ggtitle("Percentage of Flights Delayed by Destination") + labs(x="Destinations",y="Percentage")
+flight$CARRIER_CODE = as.numeric(as.factor(flight$AIRLINE))
+flight$origin= as.numeric(as.factor(flight$ORIGIN_AIRPORT))
+flight$dest=as.numeric(as.factor(flight$DESTINATION_AIRPORT))
+flight$ARR_HOUR = floor(flight$ARRIVAL_TIME/100)
+
+```
+```{r}
+# Create break points and labels for axis ticks
+theme_set(theme_bw())
+
+# Draw plot
+ggplot(flight, aes(MONTH, ARRIVAL_DELAY)) + 
+  geom_bar(stat="identity", width=.5, fill="tomato3") + 
+  labs(title="Ordered Bar Chart", 
+       subtitle="Flight delay based on months", 
+       caption="source: flight") + 
+  theme(axis.text.x = element_text(angle=65, vjust=0.6))
+ggplot(flight, aes(x = MONTH)) + geom_bar() +labs(title="Ordered Bar Chart", 
+       subtitle="Flight count for each month", 
+       caption="source: flight") + 
+  theme(axis.text.x = element_text(angle=65, vjust=0.6))
+#plot of delay as a result of proximity to holidays
+ggplot(flight, aes(HDAYS, ARRIVAL_DELAY)) + 
+  geom_bar(stat="identity", width=.5, fill="blue") + 
+  labs(title="Ordered Bar Chart", 
+       subtitle="Flight delay based on Holidays", 
+       caption="source: flight") + 
+  theme(axis.text.x = element_text(angle=65, vjust=0.6))
+```
+
